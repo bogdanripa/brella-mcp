@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { collect, pick } from "../brella/jsonapi.js";
+import { pick } from "../brella/jsonapi.js";
 import { mapAttendee, mapEvent, mapSession } from "../brella/mappers.js";
 import { routes } from "../brella/routes.js";
 import { CATALOG_TTL, pageQuery, paged } from "../brella/service.js";
@@ -150,23 +150,35 @@ export function registerEventTools(server: McpServer, ctx: ToolContext): void {
     async (args, acct) => {
       const ev = await acct.event(args.event);
       const me = await acct.meWithAttendee(ev.slug);
-      const { nodes, page } = await paged(
-        (number, size) =>
-          acct.http.get(routes.search(ev.slug), { query: { search: args.query, ...pageQuery(number, size) }, cacheTtlMs: CATALOG_TTL, notFound: "EVENT_NOT_FOUND" }),
-        args,
-        acct.cfg.pageSizeDefault,
-      );
-      // Results may be typed resources or wrappers ({ searchable: {...} }).
-      const items = nodes.flatMap((n) => (n.searchable && typeof n.searchable === "object" ? [n.searchable] : [n]));
-      const attendees = [...items.filter((n) => n.type === "attendee"), ...collect(items.filter((n) => n.type !== "attendee"), "attendee")];
-      const sessions = items.filter((n) => n.type === "timeslot");
-      const sponsors = items.filter((n) => n.type === "sponsor").map((s) => ({ sponsor_id: s.id, name: pick(s, "name", "title") ?? null }));
-      const uniq = <T extends { id?: string }>(xs: T[]) => [...new Map(xs.map((x) => [x.id, x])).values()];
+      // Brella's search is per type (same query params as the web app's search tabs).
+      const run = (type: string, extra: Record<string, string> = {}) =>
+        paged(
+          (number, size) =>
+            acct.http.get(routes.search(ev.slug), {
+              query: { type, search: args.query, ...extra, ...pageQuery(number, size) },
+              cacheTtlMs: CATALOG_TTL,
+              notFound: "EVENT_NOT_FOUND",
+            }),
+          args,
+          Math.min(acct.cfg.pageSizeDefault, 20),
+        );
+      const [people, sessions, sponsors] = await Promise.all([
+        run("registrant", { include: "attendee,attendee.user" }),
+        run("timeslot", { include: "tags" }),
+        run("sponsor").catch(() => ({ nodes: [] as any[], page: undefined })),
+      ]);
+      const attendees = people.nodes
+        // A registrant without an attendee hasn't joined networking; keep only joined people.
+        .map((r) => (r.attendee && typeof r.attendee === "object" && r.attendee.id ? { ...r.attendee, user: r.attendee.user ?? r.user } : null))
+        .filter((a): a is NonNullable<typeof a> => !!a);
       return {
-        attendees: uniq(attendees).map((a) => mapAttendee(a, ev.slug, me.attendeeId)),
-        sessions: uniq(sessions).map((s) => mapSession(s, ev.slug, new Set(), ev.timezone)),
-        sponsors,
-        page,
+        attendees: attendees.map((a) => mapAttendee(a, ev.slug, me.attendeeId)),
+        sessions: sessions.nodes.map((t) => {
+          const { description: _d, ...rest } = mapSession(t, ev.slug, new Set(), ev.timezone);
+          return rest;
+        }),
+        sponsors: sponsors.nodes.map((x) => ({ sponsor_id: x.id ?? null, name: pick(x, "name", "title") ?? null, subtitle: pick(x, "subtitle") ?? null })),
+        page: { attendees: people.page, sessions: sessions.page, sponsors: sponsors.page },
         meta: meta(acct, ev.slug),
       };
     },
