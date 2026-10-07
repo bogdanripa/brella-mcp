@@ -1,0 +1,46 @@
+{
+  "name": "brella-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for Brella attendee workflows (events, agenda, meetings, chats) with setup-only email-code sign-in",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "start:stdio": "node dist/stdio.js",
+    "setup": "node dist/setup/cli.js",
+    "dev": "tsx src/server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bogdanripa/brella-mcp.git"
+  },
+  "author": "Bogdan Ripa",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/bogdanripa/brella-mcp/issues"
+  },
+  "homepage": "https://github.com/bogdanripa/brella-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "pg": "^8.23.1",
+    "ws": "^8.22.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.23.15",
+    "typescript": "5.9"
+  },
+  "type": "module",
+  "bin": {
+    "brella-mcp": "dist/stdio.js",
+    "brella-mcp-setup": "dist/setup/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
