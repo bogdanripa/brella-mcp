@@ -86,7 +86,7 @@ async function main(): Promise<number> {
         const email = rest[0];
         if (!email) throw new SetupError("INVALID_EMAIL", "usage: request <email>");
         const r = await flow.api.requestCode(cfg, email.trim().toLowerCase());
-        console.log(r.sent ? `Brella accepted the request; a code is on its way to ${email}.` : `Brella refused (${r.status}, ${r.reason}).\n${manualInstructions(email)}`);
+        console.log(r.sent ? `Brella accepted the request; a code is on its way to ${email}.` : `Brella refused (${r.status}, ${r.reason}): ${r.detail ?? ""}${r.reason === "captcha_required" ? `\n${manualInstructions(email)}` : ""}`);
         return r.sent ? 0 : 2;
       }
       case "verify": {

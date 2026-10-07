@@ -73,6 +73,7 @@ export class SetupFlow {
     else {
       const res = await this.api.requestCode(this.cfg, email);
       codeSent = res.sent;
+      if (!res.sent && res.reason === "rejected") throw new SetupError("UPSTREAM_UNREACHABLE", `Brella refused to send a code (HTTP ${res.status}): ${res.detail ?? ""}`);
       manual = !res.sent;
     }
     const attempt: Attempt = {

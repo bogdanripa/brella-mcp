@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { HttpsProxyAgent } from "https-proxy-agent";
 import WebSocket from "ws";
 import type { Config } from "../config.js";
 import { BrellaError } from "../errors.js";
@@ -39,6 +40,8 @@ export async function sendChatMessage(
     const ws = new WebSocket(url, ["actioncable-v1-ext-json", "actioncable-v1-json"], {
       headers: { Accept: "application/vnd.brella.v4+json", "User-Agent": cfg.userAgent },
       handshakeTimeout: 10_000,
+      // Same opt-in as Node's fetch: only route via HTTPS_PROXY when NODE_USE_ENV_PROXY=1 (dev sandboxes).
+      ...(process.env.NODE_USE_ENV_PROXY === "1" && process.env.HTTPS_PROXY ? { agent: new HttpsProxyAgent(process.env.HTTPS_PROXY) } : {}),
     });
     const finish = (fn: () => void) => {
       if (settled) return;

@@ -31,8 +31,11 @@ export function loginRouter(store: Store, flow: SetupFlow, provider: BrellaOAuth
     try {
       const email = String(req.body?.email ?? "").trim().toLowerCase();
       const result = await flow.api.requestCode(cfg, email);
+      if (!result.sent && result.reason === "rejected") {
+        return res.status(502).json({ error: { code: "UPSTREAM_REFUSED", message: `Brella refused to send a code (HTTP ${result.status}). Try again in a minute.` } });
+      }
       await store.kvPut("pending", id, { ...p, email, tries: 0, code_sent: result.sent } satisfies PendingAuth, PENDING_TTL);
-      res.json({ code_sent: result.sent, instructions: result.sent ? `We asked Brella to email a sign-in code to ${email}.` : manualInstructions(email) });
+      res.json({ code_sent: result.sent, instructions: result.sent ? `Brella emailed a sign-in code to ${email}.` : manualInstructions(email) });
     } catch (e) {
       sendError(res, e);
     }

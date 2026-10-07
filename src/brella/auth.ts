@@ -37,22 +37,24 @@ export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export type CodeRequestResult =
   | { sent: true }
-  | { sent: false; reason: "captcha_required" | "rejected"; status: number };
+  | { sent: false; reason: "captcha_required" | "rejected"; status: number; detail?: string };
 
 /**
  * Ask Brella to email a sign-in code. The web app attaches an invisible
- * hCaptcha token to this call; we never solve captchas, so if Brella insists
- * on one the operator triggers the email themselves (see setup instructions)
- * and only the verify step runs here.
+ * hCaptcha token, but the API accepts the request without one (verified
+ * 2026-10-07). We never solve captchas: if Brella ever insists on one, the
+ * user triggers the email at next.brella.io and only the verify step runs here.
  */
 export async function requestCode(cfg: Config, email: string): Promise<CodeRequestResult> {
   if (!EMAIL_RE.test(email)) throw new SetupError("INVALID_EMAIL", "That does not look like an email address");
   const res = await call(cfg, "POST", routes.requestCode(), { one_click_link: { email } });
   if (res.ok) return { sent: true };
   if (res.status === 429) throw new SetupError("RATE_LIMITED", "Brella says too many attempts; wait an hour and retry");
-  const text = (await res.text()).toLowerCase();
-  const captcha = text.includes("captcha");
-  return { sent: false, reason: captcha || res.status === 422 || res.status === 403 ? "captcha_required" : "rejected", status: res.status };
+  const text = (await res.text()).slice(0, 300);
+  // Only call it a captcha when Brella says so; anything else (WAF, proxy, validation) is reported as-is.
+  const captcha = /captcha/i.test(text);
+  console.error(`[brella] code request refused: HTTP ${res.status}${captcha ? " (captcha)" : ""}`);
+  return { sent: false, reason: captcha ? "captcha_required" : "rejected", status: res.status, detail: text.replace(/\s+/g, " ").slice(0, 160) };
 }
 
 export interface VerifiedSession {
