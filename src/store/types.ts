@@ -1,4 +1,4 @@
-/** Non-secret account metadata written by setup (spec §4.1 step 4). */
+/** Non-secret account metadata. */
 export interface AccountMeta {
   email: string;
   alias?: string;
@@ -9,7 +9,7 @@ export interface AccountMeta {
   verified_at?: string;
 }
 
-/** Secret session material for one account. Never leaves the store/client. */
+/** Brella session material for one account. Never leaves the store/client. */
 export interface StoredSession {
   "access-token"?: string;
   client?: string;
@@ -18,6 +18,8 @@ export interface StoredSession {
   "token-type"?: string;
   cookies?: string[];
   updated_at: string;
+  /** Set when Brella answered 401: the account must sign in again. */
+  invalid_at?: string;
 }
 
 export interface Store {
@@ -29,5 +31,9 @@ export interface Store {
   getSession(email: string): Promise<StoredSession | null>;
   putSession(email: string, session: StoredSession): Promise<void>;
   deleteSession(email: string): Promise<void>;
+  /** Small key/value space with optional expiry (OAuth clients, codes, tokens). */
+  kvGet<T>(ns: string, key: string): Promise<T | null>;
+  kvPut(ns: string, key: string, value: unknown, ttlSeconds?: number): Promise<void>;
+  kvDelete(ns: string, key: string): Promise<void>;
   close(): Promise<void>;
 }

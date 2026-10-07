@@ -13,12 +13,15 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
       title: "List Brella accounts",
       description:
         "List the Brella accounts configured during setup, so you can pick an `account` value for other tools. " +
-        "Read-only: it never signs in or repairs sessions. `setup_required: true` means the operator must rerun setup for that account.",
+        "Read-only: it never signs in or repairs sessions. `setup_required: true` means that account must sign in again.",
       inputSchema: {},
       annotations: { title: "List Brella accounts", ...READ, openWorldHint: false },
     },
     async () => {
-      const accounts = await ctx.registry.store.listAccounts();
+      const all = await ctx.registry.store.listAccounts();
+      const accounts = ctx.boundEmail
+        ? all.filter((a) => a.email.toLowerCase() === ctx.boundEmail!.toLowerCase()).map((a) => ({ ...a, is_default: true }))
+        : all;
       const rows = await Promise.all(
         accounts.map(async (a) => {
           const session = await ctx.registry.store.getSession(a.email).catch(() => null);
@@ -27,7 +30,7 @@ export function registerAccountTools(server: McpServer, ctx: ToolContext): void 
             ...(a.alias ? { alias: a.alias } : {}),
             is_default: a.is_default,
             setup_present: !!session,
-            setup_required: !session,
+            setup_required: !session || !!session.invalid_at,
           };
         }),
       );

@@ -37,6 +37,17 @@ export class MemoryStore implements Store {
   async deleteSession(email: string) {
     this.sessions.delete(email);
   }
+  kv = new Map<string, { v: unknown; exp?: number }>();
+  async kvGet<T>(ns: string, key: string): Promise<T | null> {
+    const e = this.kv.get(`${ns}:${key}`);
+    return e && (!e.exp || e.exp > Date.now()) ? (e.v as T) : null;
+  }
+  async kvPut(ns: string, key: string, value: unknown, ttl?: number) {
+    this.kv.set(`${ns}:${key}`, { v: JSON.parse(JSON.stringify(value)), exp: ttl ? Date.now() + ttl * 1000 : undefined });
+  }
+  async kvDelete(ns: string, key: string) {
+    this.kv.delete(`${ns}:${key}`);
+  }
   async close() {}
 }
 

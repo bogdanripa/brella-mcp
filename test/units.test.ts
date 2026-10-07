@@ -7,7 +7,6 @@ import { deserialize } from "../src/brella/jsonapi.js";
 import { eventStatus, mapMeetingStatus, mapNotificationType, parseEventSlug } from "../src/brella/mappers.js";
 import { loadConfig } from "../src/config.js";
 import { redact, SetupError } from "../src/errors.js";
-import { SecretBox } from "../src/store/crypto.js";
 import { FileStore } from "../src/store/file.js";
 import { ATTEMPT_TTL_MS, MAX_CODE_TRIES, SetupFlow } from "../src/setup/flow.js";
 import { MemoryStore } from "./helpers.js";
@@ -49,15 +48,19 @@ test("redaction strips credentials", () => {
   assert.doesNotMatch(out, /abc123|xyz|123456/);
 });
 
-test("file store: encrypted at rest, 0600", async () => {
+test("file store: 0600, kv expiry", async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "bmcp-"));
   const file = path.join(dir, "store.json");
-  const store = new FileStore(file, new SecretBox("correct horse battery staple"));
+  const store = new FileStore(file);
   await store.init();
   await store.upsertAccount({ email: "A@x.io", is_default: false, created_at: "t" });
   await store.putSession("a@x.io", { "access-token": "SECRET-TOKEN", updated_at: "t" });
   assert.equal((await store.getSession("a@x.io"))!["access-token"], "SECRET-TOKEN");
-  assert.doesNotMatch(readFileSync(file, "utf8"), /SECRET-TOKEN/);
+  await store.kvPut("ns", "a", { x: 1 });
+  await store.kvPut("ns", "b", { x: 2 }, -1);
+  assert.deepEqual(await store.kvGet("ns", "a"), { x: 1 });
+  assert.equal(await store.kvGet("ns", "b"), null);
+  assert.ok(readFileSync(file, "utf8").length > 0);
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.equal((await store.listAccounts())[0].is_default, true);
   await store.removeAccount("a@x.io");

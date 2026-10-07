@@ -1,6 +1,5 @@
 import os from "node:os";
 import path from "node:path";
-import { SecretBox } from "./store/crypto.js";
 import { FileStore } from "./store/file.js";
 import { PgStore } from "./store/pg.js";
 import type { Store } from "./store/types.js";
@@ -38,8 +37,7 @@ export { VERSION };
  * otherwise a 0600 file under BRELLA_MCP_HOME (default ~/.brella-mcp).
  */
 export function createStore(env: NodeJS.ProcessEnv = process.env): Store {
-  const box = new SecretBox(env.BRELLA_SECRETS_KEY);
-  if (env.DATABASE_URL) return new PgStore(env.DATABASE_URL, box);
+  if (env.DATABASE_URL) return new PgStore(env.DATABASE_URL);
   const home = env.BRELLA_MCP_HOME ?? path.join(os.homedir(), ".brella-mcp");
-  return new FileStore(path.join(home, "store.json"), box);
+  return new FileStore(path.join(home, "store.json"));
 }

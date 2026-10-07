@@ -265,8 +265,17 @@ export class AccountRegistry {
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
-  async resolve(account?: string): Promise<BrellaAccount> {
-    const accounts = await this.store.listAccounts();
+  /**
+   * @param bound When the caller authenticated via OAuth, the Brella account its
+   *   token belongs to; other accounts are invisible to it.
+   */
+  async resolve(account?: string, bound?: string): Promise<BrellaAccount> {
+    let accounts = await this.store.listAccounts();
+    if (bound) {
+      accounts = accounts.filter((a) => a.email.toLowerCase() === bound.toLowerCase());
+      if (!accounts.length) throw new BrellaError("SETUP_REQUIRED", "This connection's Brella account is no longer set up. Reconnect to sign in again.");
+      accounts = accounts.map((a) => ({ ...a, is_default: true }));
+    }
     let meta: AccountMeta | undefined;
     if (account) {
       const key = account.trim().toLowerCase();

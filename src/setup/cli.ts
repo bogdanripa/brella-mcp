@@ -2,7 +2,7 @@
 import { createInterface } from "node:readline";
 import { createStore, loadConfig } from "../config.js";
 import { SetupError } from "../errors.js";
-import { MAX_CODE_TRIES, SetupFlow } from "./flow.js";
+import { manualInstructions, MAX_CODE_TRIES, SetupFlow } from "./flow.js";
 
 /**
  * Local setup surface (spec §4.1). The code is read from the terminal with
@@ -12,6 +12,10 @@ import { MAX_CODE_TRIES, SetupFlow } from "./flow.js";
  *   brella-mcp-setup list
  *   brella-mcp-setup default <email>
  *   brella-mcp-setup remove <email>
+ *
+ * Two-step, non-interactive variant (e.g. for testing from a chat session):
+ *   brella-mcp-setup request <email>
+ *   brella-mcp-setup verify <email> <code> [--alias work] [--default]
  */
 
 function promptHidden(question: string): Promise<string> {
@@ -78,6 +82,26 @@ async function main(): Promise<number> {
         }
         throw new SetupError("TOO_MANY_ATTEMPTS", "Too many wrong codes; run add again for a fresh code");
       }
+      case "request": {
+        const email = rest[0];
+        if (!email) throw new SetupError("INVALID_EMAIL", "usage: request <email>");
+        const r = await flow.api.requestCode(cfg, email.trim().toLowerCase());
+        console.log(r.sent ? `Brella accepted the request; a code is on its way to ${email}.` : `Brella refused (${r.status}, ${r.reason}).\n${manualInstructions(email)}`);
+        return r.sent ? 0 : 2;
+      }
+      case "verify": {
+        const [email, code] = rest;
+        if (!email || !code) throw new SetupError("INVALID_CODE", "usage: verify <email> <code>");
+        const alias = flag(rest, "alias");
+        const v = await flow.api.verifyCode(cfg, email.trim().toLowerCase(), code);
+        const ready = await flow.completeSignIn(
+          { email: email.trim().toLowerCase(), alias: typeof alias === "string" ? alias : undefined, makeDefault: !!flag(rest, "default") },
+          v.session,
+          v.user,
+        );
+        console.log(`✔ ${ready.email} ready. Events: ${ready.events.map((e) => `${e.slug} (${e.status})`).join(", ") || "none"}`);
+        return 0;
+      }
       case "list": {
         for (const a of await flow.status()) {
           const state = a.session_valid === true ? "ready" : a.session_valid === false ? "SETUP REQUIRED" : "unknown (Brella unreachable)";
@@ -100,7 +124,7 @@ async function main(): Promise<number> {
         return 0;
       }
       default:
-        console.log("usage: brella-mcp-setup <add|list|default|remove> ...");
+        console.log("usage: brella-mcp-setup <add|request|verify|list|default|remove> ...");
         return cmd ? 1 : 0;
     }
   } catch (e) {

@@ -18,6 +18,8 @@ export const pagingArgs = {
 
 export interface ToolContext {
   registry: AccountRegistry;
+  /** Set for OAuth callers: the only Brella account this connection may use. */
+  boundEmail?: string;
 }
 
 export const READ = { readOnlyHint: true, openWorldHint: true } as const;
@@ -65,7 +67,7 @@ export function tool<S extends z.ZodRawShape>(
     (async (args: any) => {
       let acct: BrellaAccount | null = null;
       try {
-        acct = await ctx.registry.resolve(args?.account);
+        acct = await ctx.registry.resolve(args?.account, ctx.boundEmail);
         return ok(await handler(args, acct));
       } catch (e) {
         return fail(e, acct?.email);

@@ -57,7 +57,7 @@ export class SetupFlow {
     private readonly cfg: Config,
     private readonly store: Store,
     private readonly now: () => number = Date.now,
-    private readonly api = { requestCode, verifyCode, validateSession, signOut },
+    readonly api = { requestCode, verifyCode, validateSession, signOut },
   ) {}
 
   async start(emailRaw: string, opts: { alias?: string; makeDefault?: boolean; skipRequest?: boolean } = {}): Promise<StartResult> {
@@ -108,10 +108,15 @@ export class SetupFlow {
     a.tries++;
     const verified = await this.api.verifyCode(this.cfg, a.email, code);
     this.attempts.delete(attemptId);
-    return this.finish(a, verified.session, verified.user);
+    return this.completeSignIn(a, verified.session, verified.user);
   }
 
-  private async finish(a: Attempt, session: StoredSession, user?: { id?: string; email?: string; name?: string }): Promise<ReadyAccount> {
+  /** Persist a verified Brella session and account metadata (used by the CLI and the OAuth login page). */
+  async completeSignIn(
+    a: { email: string; alias?: string; makeDefault: boolean },
+    session: StoredSession,
+    user?: { id?: string; email?: string; name?: string },
+  ): Promise<ReadyAccount> {
     await this.store.putSession(a.email, session);
     const checked = (await this.api.validateSession(this.cfg, session).catch(() => undefined)) ?? user;
     const existing = (await this.store.listAccounts()).find((x) => x.email.toLowerCase() === a.email);

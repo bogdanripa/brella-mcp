@@ -4,11 +4,15 @@ An MCP server that operates **your own Brella attendee account(s)** without a
 browser: events, agenda and bookmarks, 1:1 meeting requests (accept, decline,
 propose, reschedule, cancel), chats, attendee search and the activity feed.
 
-* Sign-in is **setup-only**: an email one-time code entered in a local CLI or
-  a token-gated setup page. No MCP tool accepts codes, tokens or passwords.
-* Multiple accounts (email or alias), with a default.
-* Sessions are stored AES-256-GCM-encrypted (Postgres or a `0600` file), and
-  rotated `access-token`s are persisted after every response.
+* **OAuth for MCP clients**: add the server URL to ChatGPT, Claude or another
+  client. It opens our `/login` page, where you enter your Brella email and
+  then the code Brella emails you. You're sent back to the client with a token
+  bound to that Brella account. No MCP tool accepts codes, tokens or passwords.
+* Stateless: sessions, OAuth clients, codes and tokens are all kept in the
+  store (Postgres, or a `0600` JSON file locally). Rotated Brella
+  `access-token`s are persisted after every response.
+* An expired Brella session makes the OAuth token fail with 401, so the client
+  sends you through login again.
 * Throttled to 2 requests/s per account. Only idempotent GETs are retried.
 * Upstream routes are pinned from Brella's own web app; see
   [docs/upstream-contract.md](docs/upstream-contract.md).
@@ -29,49 +33,47 @@ Errors use stable codes such as `SETUP_REQUIRED`, `MEETING_STATE_CHANGED`,
 `SLOT_UNAVAILABLE` and `RATE_LIMITED`. Write tools are idempotent and return
 `already_applied: true` when nothing needed doing.
 
-## Setting up an account
+## Signing in
 
-Brella attaches an invisible hCaptcha to its "email me a code" request. Setup
-first asks Brella directly. If Brella requires the captcha, setup asks you to
-open <https://next.brella.io/login>, choose **Continue with email**, enter
-your address, and then type the emailed code **into setup**, not into the
-Brella page.
+**From an MCP client**: point the client at `https://<host>/mcp`. It
+discovers OAuth via `/.well-known/oauth-protected-resource`, registers
+itself (dynamic client registration) and opens `/login`.
 
-**Deployed server**: open `https://<host>/setup`, paste the `SETUP_TOKEN`,
-then enter your email and the code.
+Brella's own web app attaches an invisible hCaptcha when it asks for a code.
+If Brella refuses our request, the login page asks you to request the code at
+<https://next.brella.io/login> (**Continue with email**). You then enter the
+code on our page, not on Brella's.
 
-**Local**:
+**Local CLI** (stdio use, or the admin token):
 
 ```bash
 npm ci && npm run build
 node dist/setup/cli.js add you@example.com --alias work --default   # prompts for the code (hidden)
+node dist/setup/cli.js request you@example.com                       # two-step variant
+node dist/setup/cli.js verify you@example.com 123456
 node dist/setup/cli.js list
 node dist/setup/cli.js remove you@example.com                        # upstream sign-out + local delete
+npx tsx scripts/call.ts brella_list_my_events '{"status":"ongoing"}' # call a tool locally
 ```
-
-If a tool later returns `SETUP_REQUIRED`, run setup again for that account.
 
 ## Running
 
 | Variable | Purpose |
 |---|---|
-| `MCP_AUTH_TOKEN` | Required for HTTP (≥24 chars). Send `Authorization: Bearer …`, or use `/mcp/<token>` for clients that can't set headers. |
-| `SETUP_TOKEN` | Enables the `/setup` page. Leave it unset to disable the page. |
-| `BRELLA_SECRETS_KEY` | Passphrase for encrypting stored sessions. |
+| `PUBLIC_URL` | External base URL, used as the OAuth issuer (e.g. `https://brella-mcp-coolify.bogdanripa.com`). |
+| `MCP_AUTH_TOKEN` | Optional static admin token with access to all accounts (`Authorization: Bearer …` or `/mcp/<token>`). |
 | `DATABASE_URL` | Postgres store. Otherwise a file under `BRELLA_MCP_HOME` (default `~/.brella-mcp`). |
 | `PORT`, `HOST` | Default `3000`, `::`. The image uses port 80. |
 
 ```bash
-npm start            # Streamable HTTP on /mcp (stateless), /health
+npm start            # Streamable HTTP on /mcp (stateless), OAuth endpoints, /login, /health
 npm run start:stdio  # stdio for local MCP clients
 npm test             # contract tests against synthetic JSON:API fixtures
 ```
 
-Claude Code example:
-
-```bash
-claude mcp add --transport http brella https://<host>/mcp --header "Authorization: Bearer $MCP_AUTH_TOKEN"
-```
+Chat messages are sent the way Brella's app sends them: over its AnyCable
+websocket. Each send opens a socket, sends one message and closes it, so the
+server keeps no connections between requests. Everything else is REST.
 
 ## Deployment
 

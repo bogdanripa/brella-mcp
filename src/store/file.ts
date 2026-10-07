@@ -1,24 +1,18 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { SecretBox } from "./crypto.js";
 import type { AccountMeta, Store, StoredSession } from "./types.js";
 
 interface FileShape {
   accounts: AccountMeta[];
-  secrets: Record<string, string>;
+  sessions: Record<string, StoredSession>;
+  kv: Record<string, { v: unknown; exp?: number }>;
 }
 
-/**
- * Single-file store. Accounts are plain metadata; sessions are sealed with
- * SecretBox. The file is written atomically with mode 0600.
- */
+/** Single JSON file (mode 0600), for local use. Writes are atomic and serialized. */
 export class FileStore implements Store {
   private chain: Promise<unknown> = Promise.resolve();
 
-  constructor(
-    private readonly file: string,
-    private readonly box: SecretBox,
-  ) {}
+  constructor(private readonly file: string) {}
 
   async init(): Promise<void> {
     await fs.mkdir(path.dirname(this.file), { recursive: true, mode: 0o700 });
@@ -26,23 +20,22 @@ export class FileStore implements Store {
 
   private async read(): Promise<FileShape> {
     try {
-      const raw = await fs.readFile(this.file, "utf8");
-      const parsed = JSON.parse(raw) as Partial<FileShape>;
-      return { accounts: parsed.accounts ?? [], secrets: parsed.secrets ?? {} };
+      const p = JSON.parse(await fs.readFile(this.file, "utf8")) as Partial<FileShape>;
+      return { accounts: p.accounts ?? [], sessions: p.sessions ?? {}, kv: p.kv ?? {} };
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") return { accounts: [], secrets: {} };
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") return { accounts: [], sessions: {}, kv: {} };
       throw e;
     }
   }
 
-  private async write(data: FileShape): Promise<void> {
+  private async write(d: FileShape): Promise<void> {
+    const now = Date.now();
+    for (const [k, v] of Object.entries(d.kv)) if (v.exp && v.exp < now) delete d.kv[k];
     const tmp = `${this.file}.${process.pid}.tmp`;
-    await fs.writeFile(tmp, JSON.stringify(data, null, 2), { mode: 0o600 });
+    await fs.writeFile(tmp, JSON.stringify(d, null, 2), { mode: 0o600 });
     await fs.rename(tmp, this.file);
-    await fs.chmod(this.file, 0o600);
   }
 
-  /** Serialize read-modify-write cycles within this process. */
   private mutate(fn: (d: FileShape) => void): Promise<void> {
     const next = this.chain.then(async () => {
       const d = await this.read();
@@ -72,7 +65,7 @@ export class FileStore implements Store {
     return this.mutate((d) => {
       const key = email.toLowerCase();
       d.accounts = d.accounts.filter((a) => a.email.toLowerCase() !== key);
-      delete d.secrets[key];
+      delete d.sessions[key];
       if (!d.accounts.some((a) => a.is_default) && d.accounts[0]) d.accounts[0].is_default = true;
     });
   }
@@ -85,19 +78,36 @@ export class FileStore implements Store {
   }
 
   async getSession(email: string): Promise<StoredSession | null> {
-    const sealed = (await this.read()).secrets[email.toLowerCase()];
-    return sealed ? this.box.open<StoredSession>(sealed) : null;
+    return (await this.read()).sessions[email.toLowerCase()] ?? null;
   }
 
   putSession(email: string, session: StoredSession): Promise<void> {
     return this.mutate((d) => {
-      d.secrets[email.toLowerCase()] = this.box.seal(session);
+      d.sessions[email.toLowerCase()] = session;
     });
   }
 
   deleteSession(email: string): Promise<void> {
     return this.mutate((d) => {
-      delete d.secrets[email.toLowerCase()];
+      delete d.sessions[email.toLowerCase()];
+    });
+  }
+
+  async kvGet<T>(ns: string, key: string): Promise<T | null> {
+    const e = (await this.read()).kv[`${ns}:${key}`];
+    if (!e || (e.exp && e.exp < Date.now())) return null;
+    return e.v as T;
+  }
+
+  kvPut(ns: string, key: string, value: unknown, ttlSeconds?: number): Promise<void> {
+    return this.mutate((d) => {
+      d.kv[`${ns}:${key}`] = { v: value, ...(ttlSeconds ? { exp: Date.now() + ttlSeconds * 1000 } : {}) };
+    });
+  }
+
+  kvDelete(ns: string, key: string): Promise<void> {
+    return this.mutate((d) => {
+      delete d.kv[`${ns}:${key}`];
     });
   }
 

@@ -142,7 +142,7 @@ export class AccountClient {
 
   private async once(method: Method, path: string, opts: RequestOptions): Promise<RawResponse> {
     const session = await this.store.getSession(this.email);
-    if (!session) {
+    if (!session || session.invalid_at) {
       throw new BrellaError("SETUP_REQUIRED", `No stored Brella session for ${this.email}. Run setup for this account.`, {
         account: this.email,
       });
@@ -200,6 +200,14 @@ export class AccountClient {
     if (s >= 200 && s < 300) return res;
     const upstreamMsg = errorTitle(res.json);
     if (s === 401) {
+      // Serialized per account, so this is not a rotation race: the session is dead.
+      // Flag it (don't delete) so OAuth tokens bound to it stop verifying and the client re-authenticates.
+      void this.store
+        .getSession(this.email)
+        .then(async (cur) => {
+          if (cur && !cur.invalid_at) await this.store.putSession(this.email, { ...cur, invalid_at: new Date().toISOString() });
+        })
+        .catch(() => undefined);
       throw new BrellaError("SETUP_REQUIRED", `Brella rejected the stored session for ${this.email}. Rerun setup for this account.`, {
         account: this.email,
       }, s);
