@@ -17,11 +17,11 @@ attribute names inferred, mappers read several candidates.
 
 | Step | Request | Notes |
 |---|---|---|
-| Request email code | `POST /one_click_links` `{ hcaptcha_token, one_click_link: { email } }` | BUNDLE. The web app attaches an **invisible hCaptcha** token. We never solve captchas: setup tries without one and, if Brella insists, the operator triggers the email at next.brella.io/login and enters the code only in setup. |
+| Request email code | `POST /one_click_links` `{ hcaptcha_token, one_click_link: { email } }` | BUNDLE. Needs Brella's **invisible hCaptcha** token. Without it Brella answers `200 {"data":[]}` and **sends nothing** (verified 2026-10-07). We never solve captchas, so users request the code at next.brella.io/login and enter it on our page. |
 | Verify code | `POST /one_click_links/sign_in` `{ token: "<6-char code>", email }` | BUNDLE. Session comes back in `access-token`/`client`/`uid` response headers. 429 = "wait an hour". |
 | Validate session | `GET /me/user` | BUNDLE (the app has no `validate_token` call). |
 | Sign out | `DELETE /auth/sign_out` | BUNDLE + PUBLIC. |
-| Password sign-in | `POST /auth/sign_in` | BUNDLE + PUBLIC. **Not used** (email code only). |
+| Password sign-in | `POST /auth/sign_in` `{ email, password }` | BUNDLE + PUBLIC. No captcha. Optional login path for users who set a Brella password; the password is never stored. |
 
 ## Data/action routes
 
@@ -57,4 +57,3 @@ attribute names inferred, mappers read several candidates.
   `null` rather than guess; `include_raw: true` exposes the upstream object.
 * Meeting status enum values beyond `pending`/`accepted`/`rejected`/`cancelled`
   (unknown values map to `unknown` with `raw_status`).
-* Whether `POST /one_click_links` ever succeeds without an hCaptcha token.

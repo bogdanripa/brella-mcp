@@ -2,20 +2,21 @@
 import { createInterface } from "node:readline";
 import { createStore, loadConfig } from "../config.js";
 import { SetupError } from "../errors.js";
-import { manualInstructions, MAX_CODE_TRIES, SetupFlow } from "./flow.js";
+import { MAX_CODE_TRIES, SetupFlow } from "./flow.js";
 
 /**
  * Local setup surface (spec §4.1). The code is read from the terminal with
  * echo disabled — never from argv, env or an MCP tool.
  *
- *   brella-mcp-setup add <email> [--alias work] [--default] [--manual]
+ *   brella-mcp-setup add <email> [--alias work] [--default]
  *   brella-mcp-setup list
  *   brella-mcp-setup default <email>
  *   brella-mcp-setup remove <email>
  *
- * Two-step, non-interactive variant (e.g. for testing from a chat session):
- *   brella-mcp-setup request <email>
- *   brella-mcp-setup verify <email> <code> [--alias work] [--default]
+ * Brella only emails codes from its own site (captcha), so `add` tells you to request
+ * the code at next.brella.io and then prompts for it. Other forms:
+ *   brella-mcp-setup verify <email> <code> [--alias work] [--default]   (non-interactive)
+ *   brella-mcp-setup password <email> [--alias work] [--default]       (Brella password, prompted)
  */
 
 function promptHidden(question: string): Promise<string> {
@@ -53,12 +54,11 @@ async function main(): Promise<number> {
     switch (cmd) {
       case "add": {
         const email = rest.find((x) => !x.startsWith("--"));
-        if (!email) throw new SetupError("INVALID_EMAIL", "usage: add <email> [--alias name] [--default] [--manual]");
+        if (!email) throw new SetupError("INVALID_EMAIL", "usage: add <email> [--alias name] [--default]");
         const alias = flag(rest, "alias");
         const start = await flow.start(email, {
           alias: typeof alias === "string" ? alias : undefined,
           makeDefault: !!flag(rest, "default"),
-          skipRequest: !!flag(rest, "manual"),
         });
         console.log(start.instructions);
         for (let i = 0; i < MAX_CODE_TRIES; i++) {
@@ -82,12 +82,14 @@ async function main(): Promise<number> {
         }
         throw new SetupError("TOO_MANY_ATTEMPTS", "Too many wrong codes; run add again for a fresh code");
       }
-      case "request": {
-        const email = rest[0];
-        if (!email) throw new SetupError("INVALID_EMAIL", "usage: request <email>");
-        const r = await flow.api.requestCode(cfg, email.trim().toLowerCase());
-        console.log(r.sent ? `Brella accepted the request; a code is on its way to ${email}.` : `Brella refused (${r.status}, ${r.reason}): ${r.detail ?? ""}${r.reason === "captcha_required" ? `\n${manualInstructions(email)}` : ""}`);
-        return r.sent ? 0 : 2;
+      case "password": {
+        const email = rest.find((x) => !x.startsWith("--"));
+        if (!email) throw new SetupError("INVALID_EMAIL", "usage: password <email> [--alias name] [--default]");
+        const alias = flag(rest, "alias");
+        const pw = await promptHidden("Brella password: ");
+        const ready = await flow.signInWithPassword(email, pw, { alias: typeof alias === "string" ? alias : undefined, makeDefault: !!flag(rest, "default") });
+        console.log(`✔ ${ready.email} ready. Events: ${ready.events.map((e) => `${e.slug} (${e.status})`).join(", ") || "none"}`);
+        return 0;
       }
       case "verify": {
         const [email, code] = rest;
@@ -124,7 +126,7 @@ async function main(): Promise<number> {
         return 0;
       }
       default:
-        console.log("usage: brella-mcp-setup <add|request|verify|list|default|remove> ...");
+        console.log("usage: brella-mcp-setup <add|verify|password|list|default|remove> ...");
         return cmd ? 1 : 0;
     }
   } catch (e) {

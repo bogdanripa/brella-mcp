@@ -43,7 +43,9 @@ export function createApp(opts: AppOptions): express.Express {
   const resourceMetadataUrl = new URL("/.well-known/oauth-protected-resource/mcp", publicUrl).toString();
 
   const app = express();
-  app.set("trust proxy", true);
+  // Number of reverse proxies in front of us (Pironman: edge proxy). A fixed hop count keeps
+  // req.ip honest for the OAuth endpoints' rate limiter; `true` would let clients spoof it.
+  app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS ?? 1));
   app.disable("x-powered-by");
 
   const home = homePage(publicUrl);

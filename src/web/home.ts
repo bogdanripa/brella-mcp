@@ -92,15 +92,16 @@ footer{padding:30px 0 48px;color:var(--muted);font-size:14px;border-top:1px soli
 </div>
 <ol class="steps" style="margin-top:22px">
 <li><b>Add the connector</b><span>Your assistant opens a sign-in page on this site.</span></li>
-<li><b>Enter your Brella email</b><span>We ask Brella to email you a one-time sign-in code.</span></li>
-<li><b>Type the code</b><span>You're sent straight back to your assistant, ready to go.</span></li>
+<li><b>Get a code from Brella</b><span>Enter your email, then tap through to Brella's login page, which emails you a one-time code. Have a Brella password? You can use that instead.</span></li>
+<li><b>Type the code here</b><span>Enter it on our page, not Brella's, and you're sent straight back to your assistant.</span></li>
 </ol>
 </section>
 
 <section id="faq">
 <h2>Questions</h2>
 <details><summary>Is this made by Brella?</summary><p>No. It's an independent, open-source connector. It works with your own Brella attendee account through the same requests the Brella web app makes. "Brella" is a trademark of its owner.</p></details>
-<details><summary>Does the AI see my sign-in code?</summary><p>No. You type the code on this site's sign-in page, never in the chat. The assistant only gets a token that works for the account you signed in with.</p></details>
+<details><summary>Does the AI see my sign-in code or password?</summary><p>No. You type them on this site's sign-in page, never in the chat, and they go only to Brella. Passwords are never stored. The assistant only gets a token that works for the account you signed in with.</p></details>
+<details><summary>Why do I get the code from Brella's own page?</summary><p>Brella only sends sign-in codes from its own site, which protects them with a captcha. You request the code there, and this page turns it into a connection.</p></details>
 <details><summary>What is stored?</summary><p>Your Brella session for the signed-in account, so the connector can act for you, plus the tokens your assistant uses. Event data isn't copied or kept. Everything else is fetched live from Brella when you ask.</p></details>
 <details><summary>Can it send messages or accept meetings without me?</summary><p>It acts only when your assistant calls it, one meeting, session or conversation at a time. There are no bulk-messaging tools. Most assistants ask you to confirm before an action that changes something.</p></details>
 <details><summary>How do I disconnect?</summary><p>Remove the connector in your assistant. Sessions expire on Brella's side too, and when that happens you're asked to sign in again.</p></details>

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config.js";
-import { EMAIL_RE, requestCode, signOut, validateSession, verifyCode } from "../brella/auth.js";
+import { BRELLA_LOGIN_URL, EMAIL_RE, passwordSignIn, signOut, validateSession, verifyCode } from "../brella/auth.js";
 import { buildUrl, sessionHeaders, V4_HEADERS } from "../brella/http.js";
 import { deserialize } from "../brella/jsonapi.js";
 import { mapEvent } from "../brella/mappers.js";
@@ -23,9 +23,7 @@ interface Attempt {
 export interface StartResult {
   attempt_id: string;
   email: string;
-  code_sent: boolean;
-  /** When Brella wants a captcha for the email request, the operator triggers it in the official app. */
-  manual_request_needed: boolean;
+  brella_login_url: string;
   instructions: string;
   expires_at: string;
 }
@@ -38,11 +36,10 @@ export interface ReadyAccount {
   events: { slug: string; name: string | null; status: string }[];
 }
 
-export function manualInstructions(email: string): string {
+export function codeInstructions(email: string): string {
   return (
-    `Brella requires a captcha to send the code from here. Open https://next.brella.io/login in your browser, choose ` +
-    `"Continue with email", enter ${email} and press continue — Brella emails you a 6-digit code. ` +
-    `Do not type the code on the Brella page; enter it in this setup instead.`
+    `Open ${BRELLA_LOGIN_URL}, choose "Continue with email", enter ${email} and press continue. ` +
+    `Brella emails you a 6-character code. Don't type it on Brella's page; enter it here instead.`
   );
 }
 
@@ -57,25 +54,16 @@ export class SetupFlow {
     private readonly cfg: Config,
     private readonly store: Store,
     private readonly now: () => number = Date.now,
-    readonly api = { requestCode, verifyCode, validateSession, signOut },
+    readonly api = { verifyCode, passwordSignIn, validateSession, signOut },
   ) {}
 
-  async start(emailRaw: string, opts: { alias?: string; makeDefault?: boolean; skipRequest?: boolean } = {}): Promise<StartResult> {
+  async start(emailRaw: string, opts: { alias?: string; makeDefault?: boolean } = {}): Promise<StartResult> {
     const email = emailRaw.trim().toLowerCase();
     if (!EMAIL_RE.test(email)) throw new SetupError("INVALID_EMAIL", "That does not look like an email address");
     // A new attempt for the same email invalidates the previous one.
     for (const [id, a] of this.attempts) if (a.email === email) this.attempts.delete(id);
     this.gc();
 
-    let codeSent = false;
-    let manual = false;
-    if (opts.skipRequest) manual = true;
-    else {
-      const res = await this.api.requestCode(this.cfg, email);
-      codeSent = res.sent;
-      if (!res.sent && res.reason === "rejected") throw new SetupError("UPSTREAM_UNREACHABLE", `Brella refused to send a code (HTTP ${res.status}): ${res.detail ?? ""}`);
-      manual = !res.sent;
-    }
     const attempt: Attempt = {
       id: randomUUID(),
       email,
@@ -88,9 +76,8 @@ export class SetupFlow {
     return {
       attempt_id: attempt.id,
       email,
-      code_sent: codeSent,
-      manual_request_needed: manual,
-      instructions: codeSent ? `Brella emailed a sign-in code to ${email}. Enter it here.` : manualInstructions(email),
+      brella_login_url: BRELLA_LOGIN_URL,
+      instructions: codeInstructions(email),
       expires_at: new Date(attempt.createdAt + ATTEMPT_TTL_MS).toISOString(),
     };
   }
@@ -110,6 +97,13 @@ export class SetupFlow {
     const verified = await this.api.verifyCode(this.cfg, a.email, code);
     this.attempts.delete(attemptId);
     return this.completeSignIn(a, verified.session, verified.user);
+  }
+
+  /** Optional password sign-in; the password is used once and never stored. */
+  async signInWithPassword(emailRaw: string, password: string, opts: { alias?: string; makeDefault?: boolean } = {}): Promise<ReadyAccount> {
+    const email = emailRaw.trim().toLowerCase();
+    const verified = await this.api.passwordSignIn(this.cfg, email, password);
+    return this.completeSignIn({ email, alias: opts.alias, makeDefault: !!opts.makeDefault }, verified.session, verified.user);
   }
 
   /** Persist a verified Brella session and account metadata (used by the CLI and the OAuth login page). */

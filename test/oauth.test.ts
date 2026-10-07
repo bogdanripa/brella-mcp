@@ -14,7 +14,11 @@ async function start() {
   const cfg = { ...loadConfig({}), requestsPerSecond: 1000 };
   const requested: string[] = [];
   const flow = new SetupFlow(cfg, store, Date.now, {
-    requestCode: async (_c: any, email: string) => (requested.push(email), { sent: true }),
+    passwordSignIn: async (_c: any, email: string, pw: string) => {
+      requested.push(email);
+      if (pw !== "hunter2-test") throw new SetupError("INVALID_CREDENTIALS", "Wrong email or password");
+      return { session: { "access-token": "brella-pw-tok", client: "c", uid: "u", updated_at: "x" }, user: { id: "777", name: "P" } };
+    },
     verifyCode: async (_c: any, _e: string, code: string) => {
       if (code !== "ABC123") throw new SetupError("INVALID_CODE", "The code is invalid or expired");
       return { session: { "access-token": "brella-tok", client: "c", uid: "u", updated_at: "x" }, user: { id: "501", name: "B" } };
@@ -77,9 +81,9 @@ test("OAuth: discovery → register → authorize → /login → token → bound
     assert.match(html, /ChatGPT/);
 
     const post = (p: string, b: object) => fetch(`${base}${p}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ req, ...b }) });
-    const s1 = await (await post("/login/start", { email: "Body@Genez.io" })).json();
-    assert.equal(s1.code_sent, true);
-    assert.deepEqual(requested, ["body@genez.io"]);
+    const s1 = await (await post("/login/email", { email: "Body@Genez.io" })).json();
+    assert.equal(s1.email, "body@genez.io");
+    assert.equal(s1.brella_login_url, "https://next.brella.io/login");
     const bad = await post("/login/verify", { code: "WRONG1" });
     assert.equal(bad.status, 400);
     const ok = await (await post("/login/verify", { code: "ABC123" })).json();
@@ -130,6 +134,36 @@ test("OAuth: discovery → register → authorize → /login → token → bound
     // Static admin token still works.
     const admin = await fetch(`${base}/mcp/static-admin-token-0123456789`, { method: "POST", headers: mcpHeaders, body: JSON.stringify(mcpInit) });
     assert.equal(admin.status, 200);
+  } finally {
+    close();
+  }
+});
+
+test("OAuth: optional password sign-in completes authorization; wrong password is counted", async () => {
+  const { base, store, requested, close } = await start();
+  try {
+    const asm = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
+    const reg = await (
+      await fetch(asm.registration_endpoint, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ client_name: "Claude", redirect_uris: ["https://claude.ai/api/mcp/auth_callback"], token_endpoint_auth_method: "none" }),
+      })
+    ).json();
+    const verifier = randomBytes(32).toString("base64url");
+    const authUrl = new URL(asm.authorization_endpoint);
+    Object.entries({ response_type: "code", client_id: reg.client_id, redirect_uri: "https://claude.ai/api/mcp/auth_callback", code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256" }).forEach(([k, v]) => authUrl.searchParams.set(k, v));
+    const req = new URL((await fetch(authUrl, { redirect: "manual" })).headers.get("location")!, base).searchParams.get("req")!;
+    const post = (b: object) => fetch(`${base}/login/password`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ req, ...b }) });
+    const bad = await post({ email: "pw@x.io", password: "nope" });
+    assert.equal(bad.status, 400);
+    assert.equal((await bad.json()).error.code, "INVALID_CREDENTIALS");
+    const ok = await (await post({ email: "PW@x.io", password: "hunter2-test" })).json();
+    assert.ok(new URL(ok.redirect).searchParams.get("code"));
+    assert.deepEqual(requested, ["pw@x.io", "pw@x.io"]);
+    assert.equal(store.sessions.get("pw@x.io")!["access-token"], "brella-pw-tok");
+    // The password itself is never persisted anywhere in the store.
+    assert.doesNotMatch(JSON.stringify([...store.kv.values(), ...store.sessions.values(), store.accounts]), /hunter2/);
   } finally {
     close();
   }

@@ -72,7 +72,9 @@ function flowWith(api: Partial<ConstructorParameters<typeof SetupFlow>[3]> = {})
   const store = new MemoryStore();
   const verifyCalls: string[] = [];
   const flow = new SetupFlow(loadConfig({}), store, () => now, {
-    requestCode: async () => ({ sent: false, reason: "captcha_required", status: 422 }) as const,
+    passwordSignIn: async () => {
+      throw new SetupError("INVALID_CREDENTIALS", "bad");
+    },
     verifyCode: async (_c: any, _e: string, code: string) => {
       verifyCalls.push(code);
       if (code !== "123456") throw new SetupError("INVALID_CODE", "bad");
@@ -86,10 +88,10 @@ function flowWith(api: Partial<ConstructorParameters<typeof SetupFlow>[3]> = {})
   return { flow, store, advance: (ms: number) => (now += ms), verifyCalls };
 }
 
-test("setup: captcha fallback, verify stores session + metadata only", async () => {
+test("setup: code is requested on Brella's site; verify stores session + metadata only", async () => {
   const { flow, store } = flowWith();
   const s = await flow.start("Body@Genez.io", { alias: "work", makeDefault: true });
-  assert.equal(s.manual_request_needed, true);
+  assert.equal(s.brella_login_url, "https://next.brella.io/login");
   assert.match(s.instructions, /next\.brella\.io\/login/);
   const ready = await flow.verify(s.attempt_id, "123456");
   assert.equal(ready.email, "body@genez.io");

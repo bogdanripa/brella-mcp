@@ -39,18 +39,23 @@ Errors use stable codes such as `SETUP_REQUIRED`, `MEETING_STATE_CHANGED`,
 discovers OAuth via `/.well-known/oauth-protected-resource`, registers
 itself (dynamic client registration) and opens `/login`.
 
-Brella's own web app attaches an invisible hCaptcha when it asks for a code.
-If Brella refuses our request, the login page asks you to request the code at
-<https://next.brella.io/login> (**Continue with email**). You then enter the
-code on our page, not on Brella's.
+The login page offers two ways in:
+
+* **Email code (default).** Brella only emails a sign-in code from its own site,
+  behind a captcha. If any other client asks, Brella answers OK but sends
+  nothing. So the page links to <https://next.brella.io/login>, you request
+  the code there (**Continue with email**), then type it on our page, not
+  Brella's.
+* **Brella password (optional)**, for people who have set one. It's sent to
+  Brella once and never stored.
 
 **Local CLI** (stdio use, or the admin token):
 
 ```bash
 npm ci && npm run build
-node dist/setup/cli.js add you@example.com --alias work --default   # prompts for the code (hidden)
-node dist/setup/cli.js request you@example.com                       # two-step variant
-node dist/setup/cli.js verify you@example.com 123456
+node dist/setup/cli.js add you@example.com --alias work --default   # request the code on next.brella.io, then type it (hidden)
+node dist/setup/cli.js verify you@example.com ABC123                 # non-interactive
+node dist/setup/cli.js password you@example.com                      # Brella password (prompted, not stored)
 node dist/setup/cli.js list
 node dist/setup/cli.js remove you@example.com                        # upstream sign-out + local delete
 npx tsx scripts/call.ts brella_list_my_events '{"status":"ongoing"}' # call a tool locally
@@ -61,6 +66,7 @@ npx tsx scripts/call.ts brella_list_my_events '{"status":"ongoing"}' # call a to
 | Variable | Purpose |
 |---|---|
 | `PUBLIC_URL` | External base URL, used as the OAuth issuer (e.g. `https://brella-mcp-coolify.bogdanripa.com`). |
+| `TRUST_PROXY_HOPS` | Reverse proxies in front of the app (default 1). |
 | `MCP_AUTH_TOKEN` | Optional static admin token with access to all accounts (`Authorization: Bearer …` or `/mcp/<token>`). |
 | `DATABASE_URL` | Postgres store. Otherwise a file under `BRELLA_MCP_HOME` (default `~/.brella-mcp`). |
 | `PORT`, `HOST` | Default `3000`, `::`. The image uses port 80. |

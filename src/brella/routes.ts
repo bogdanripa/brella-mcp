@@ -7,7 +7,8 @@ const e = encodeURIComponent;
 
 export const routes = {
   // --- setup-only auth (never wrapped by an MCP tool) ---
-  requestCode: () => `/one_click_links`, // POST {hcaptcha_token?, one_click_link:{email}}
+  // POST /one_click_links {hcaptcha_token, one_click_link:{email}} sends the code — captcha-gated, so not used.
+  passwordSignIn: () => `/auth/sign_in`, // POST {email, password}
   verifyCode: () => `/one_click_links/sign_in`, // POST {token, email}
   signOut: () => `/auth/sign_out`, // DELETE
   meUser: () => `/me/user`, // GET (session validation)
