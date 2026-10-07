@@ -40,6 +40,11 @@ const mcpHeaders = { "content-type": "application/json", accept: "application/js
 test("OAuth: discovery → register → authorize → /login → token → bound MCP access", async () => {
   const { base, store, requested, close } = await start();
   try {
+    const home = await fetch(`${base}/`);
+    assert.match(home.headers.get("content-type")!, /html/);
+    assert.match(await home.text(), /github\.com\/bogdanripa\/brella-mcp/);
+    assert.equal((await (await fetch(`${base}/health`)).json()).ok, true);
+
     // Unauthenticated MCP call advertises the resource metadata.
     const r401 = await fetch(`${base}/mcp`, { method: "POST", headers: mcpHeaders, body: JSON.stringify(mcpInit) });
     assert.equal(r401.status, 401);

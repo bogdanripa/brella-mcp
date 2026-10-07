@@ -9,6 +9,7 @@ import { BrellaOAuthProvider } from "./oauth/provider.js";
 import { SetupFlow } from "./setup/flow.js";
 import type { Store } from "./store/types.js";
 import { buildServer } from "./tools/index.js";
+import { homePage } from "./web/home.js";
 
 export interface AppOptions {
   cfg: Config;
@@ -45,7 +46,12 @@ export function createApp(opts: AppOptions): express.Express {
   app.set("trust proxy", true);
   app.disable("x-powered-by");
 
-  app.get(["/health", "/"], (_req, res) => {
+  const home = homePage(publicUrl);
+  app.get("/", (_req, res) => {
+    res.set({ "cache-control": "public, max-age=300", "content-security-policy": "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'" }).type("html").send(home);
+  });
+
+  app.get("/health", (_req, res) => {
     res.json({ ok: true, name: "brella-mcp", version: VERSION, commit: process.env.GIT_SHA ?? "unknown" });
   });
 
