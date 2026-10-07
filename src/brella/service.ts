@@ -154,13 +154,15 @@ export class BrellaAccount {
   /** All agenda timeslots for an event (the schedule payload carries them). */
   async sessionNodes(slug: string): Promise<Node[]> {
     const doc = await this.http.get(routes.schedule(slug), { cacheTtlMs: CATALOG_TTL, query: { date: "all" }, notFound: "EVENT_NOT_FOUND" });
+    // Prefer the index copies: each is built from its own resource, so its relations are fully
+    // hydrated. Tree copies reached via back-references can be depth-truncated stubs.
     const byId = new Map<string, Node>();
-    for (const n of [...collect(doc.data, "timeslot"), ...[...doc.index.values()].filter((x) => x.type === "timeslot")]) {
-      const prev = byId.get(String(n.id));
-      // Prefer the most fully-hydrated copy.
-      if (!prev || Object.keys(n).length > Object.keys(prev).length) byId.set(String(n.id), n);
-    }
-    return [...byId.values()].filter((n) => !/networking|meeting_slot|^meeting$/i.test(String(pick(n, "timeslotType", "kind") ?? "")));
+    for (const n of collect(doc.data, "timeslot")) byId.set(String(n.id), n);
+    for (const n of doc.index.values()) if (n.type === "timeslot") byId.set(String(n.id), n);
+    // Networking (1:1) slots carry a networking-area; they are meeting slots, not agenda sessions.
+    return [...byId.values()].filter(
+      (n) => !(n.networkingArea && typeof n.networkingArea === "object") && !/networking|meeting_slot|^meeting$/i.test(String(pick(n, "timeslotType", "kind") ?? "")),
+    );
   }
 
   async sessions(slug: string, tz: string | null): Promise<SessionModel[]> {
@@ -247,10 +249,20 @@ export class BrellaAccount {
     return nodes.length ? nodes : doc.data;
   }
 
+  /** Your own networking slots. Without a date, Brella lists the networking dates; we fetch each. */
   async availability(slug: string, date?: string): Promise<Node[]> {
-    const doc = await this.http.get(routes.networkingAvailability(slug, date), { cacheTtlMs: LIVE_TTL, notFound: "EVENT_NOT_FOUND" });
-    const nodes = collect(doc.data, "timeslot");
-    return nodes.length ? nodes : doc.data;
+    const dates = date
+      ? [date]
+      : (await this.http.get(routes.networkingAvailability(slug), { cacheTtlMs: CATALOG_TTL, notFound: "EVENT_NOT_FOUND" })).data
+          .map((d) => String(pick(d, "date") ?? ""))
+          .filter(Boolean)
+          .slice(0, 7);
+    const out: Node[] = [];
+    for (const d of dates) {
+      const doc = await this.http.get(routes.networkingAvailability(slug, d), { cacheTtlMs: LIVE_TTL, notFound: "EVENT_NOT_FOUND" });
+      out.push(...doc.data.filter((n) => n.type === "timeslot"));
+    }
+    return out;
   }
 }
 

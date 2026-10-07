@@ -9,6 +9,28 @@ import { pick } from "./jsonapi.js";
  */
 
 const str = (v: unknown): string | null => (v === undefined || v === null || v === "" ? null : String(v));
+
+/** Render an instant in the event's timezone with its offset, e.g. 2026-10-07T14:40:00+03:00. */
+export function localIso(iso: string | null, tz: string | null): string | null {
+  if (!iso || !tz || !/T\d{2}:\d{2}/.test(iso)) return iso;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  try {
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" })
+        .formatToParts(d)
+        .map((p) => [p.type, p.value]),
+    );
+    const local = Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second);
+    const off = Math.round((local - Math.floor(d.getTime() / 1000) * 1000) / 60000);
+    const sign = off >= 0 ? "+" : "-";
+    const hh = String(Math.floor(Math.abs(off) / 60)).padStart(2, "0");
+    const mm = String(Math.abs(off) % 60).padStart(2, "0");
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${sign}${hh}:${mm}`;
+  } catch {
+    return iso;
+  }
+}
 const fullName = (o: any): string | null =>
   str(pick(o, "name", "fullName")) ?? (str([pick(o, "firstName"), pick(o, "lastName")].filter(Boolean).join(" ")) || null);
 
@@ -152,7 +174,9 @@ export interface SessionModel {
 }
 
 export function mapSession(n: Node, eventSlug: string, bookmarkedIds: Set<string>, tz: string | null): SessionModel {
-  const speakers = ((n.speakers ?? n.timeslotSpeakers ?? []) as any[]).map((s) => {
+  // Brella: timeslot.speakerAssignments[].speaker (ordered by position); older shapes: speakers[].
+  const assignments = ((n.speakerAssignments ?? []) as any[]).slice().sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  const speakers = ((assignments.length ? assignments : (n.speakers ?? n.timeslotSpeakers ?? [])) as any[]).map((s) => {
     const sp = s.speaker && typeof s.speaker === "object" ? s.speaker : s;
     return {
       attendee_id: str(pick(sp, "attendeeId", "attendee.id")),
@@ -162,18 +186,22 @@ export function mapSession(n: Node, eventSlug: string, bookmarkedIds: Set<string
       company: str(pick(sp, "companyName", "company")),
     };
   });
-  const stage = str(pick(n, "stage.name", "room.name", "stageName", "roomName", "location.name"));
+  // Brella: `location` is a free-text attribute; `locations` are tags (e.g. "Build & Grow Stage").
+  const locTags = ((n.locations ?? []) as any[]).map((t) => str(t?.name)).filter(Boolean) as string[];
+  const locText = typeof n.location === "string" ? str(n.location) : str(pick(n, "location.name", "locationName"));
+  // At HTW-style events the stage is modelled as the session's track.
+  const stage = locTags[0] ?? str(pick(n, "stage.name", "room.name", "stageName", "roomName")) ?? locText ?? str(pick(n, "track.name"));
   return {
     id: String(n.id),
     event_slug: eventSlug,
     title: str(pick(n, "title", "name")),
-    description: str(pick(n, "description", "body")),
-    starts_at: str(pick(n, "startTime", "startsAt", "startAt")),
-    ends_at: str(pick(n, "endTime", "endsAt", "endAt")),
+    description: str(pick(n, "content", "description", "subtitle", "body")),
+    starts_at: localIso(str(pick(n, "startTime", "startsAt", "startAt")), tz),
+    ends_at: localIso(str(pick(n, "endTime", "endsAt", "endAt")), tz),
     timezone: tz,
     stage,
     track: str(pick(n, "track.name", "trackName")),
-    location: str(pick(n, "location.name", "locationName")) ?? stage,
+    location: locText ?? stage,
     speakers,
     is_bookmarked: bookmarkedIds.has(String(n.id)) || n.isBookmarked === true || n.bookmarked === true,
     blocks_networking: typeof n.blocksNetworking === "boolean" ? n.blocksNetworking : typeof n.blockNetworking === "boolean" ? n.blockNetworking : null,
@@ -183,7 +211,16 @@ export function mapSession(n: Node, eventSlug: string, bookmarkedIds: Set<string
 
 // ---------- meetings ----------
 
-export type MeetingStatus = "pending" | "accepted" | "declined" | "cancelled" | "reschedule_proposed" | "completed" | "unknown";
+export type MeetingStatus =
+  | "pending"
+  | "accepted"
+  | "declined"
+  | "cancelled"
+  | "reschedule_proposed"
+  | "completed"
+  | "chat_requested"
+  | "chat_replied"
+  | "unknown";
 
 /** Fixture-tested status map (spec §6.4). */
 export const MEETING_STATUS_MAP: Record<string, MeetingStatus> = {
@@ -200,6 +237,8 @@ export const MEETING_STATUS_MAP: Record<string, MeetingStatus> = {
   rescheduled: "reschedule_proposed",
   reschedule_proposed: "reschedule_proposed",
   completed: "completed",
+  chat_requested: "chat_requested",
+  chat_replied: "chat_replied",
   finished: "completed",
   done: "completed",
 };
@@ -249,9 +288,10 @@ function personFrom(x: any): MeetingModel["counterpart"] {
 }
 
 export function mapMeeting(n: Node, me: MeContext, eventSlug: string | null, tz: string | null): MeetingModel {
-  const rawStatus = str(pick(n, "status", "state"));
-  const senderId = str(pick(n, "senderId", "sender.id", "requesterId", "requester.id", "inviterId", "inviter.id", "userId"));
-  const receiverId = str(pick(n, "receiverId", "receiver.id", "inviteeId", "invitee.id", "otherUserId"));
+  // Brella: status is the latest status-change (`currentStatus.state`); requester-id/receiver-id are user ids.
+  const rawStatus = str(pick(n, "currentStatus.state", "status", "state"));
+  const senderId = str(pick(n, "requesterId", "senderId", "sender.id", "requester.id", "inviterId", "inviter.id"));
+  const receiverId = str(pick(n, "receiverId", "receiver.id", "inviteeId", "invitee.id"));
   let direction: MeetingModel["direction"] = "unknown";
   if (typeof n.isSender === "boolean") direction = n.isSender ? "outgoing" : "incoming";
   else if (typeof n.incoming === "boolean") direction = n.incoming ? "incoming" : "outgoing";
@@ -279,7 +319,9 @@ export function mapMeeting(n: Node, me: MeContext, eventSlug: string | null, tz:
   const timeslot = n.timeslot && typeof n.timeslot === "object" ? n.timeslot : null;
   const location = n.location && typeof n.location === "object" ? n.location : null;
   const slug = eventSlug ?? str(pick(n, "event.slug", "eventSlug"));
+  // A request without a timeslot is a chat request ("start chat"), not a meeting.
   const chatOnly = n.chat === true || n.isChat === true || /chat/i.test(String(pick(n, "meetingType", "kind") ?? "")) || (!timeslot && !pick(n, "startTime"));
+  const tableIdx = pick(n, "table.tableIndex", "table.name", "tableName", "tableNumber");
   return {
     meeting_id: String(n.id),
     event_slug: slug,
@@ -288,13 +330,13 @@ export function mapMeeting(n: Node, me: MeContext, eventSlug: string | null, tz:
     raw_status: rawStatus,
     is_chat_only: chatOnly,
     counterpart,
-    starts_at: str(pick(timeslot, "startTime", "startsAt") ?? pick(n, "startTime", "startsAt")),
-    ends_at: str(pick(timeslot, "endTime", "endsAt") ?? pick(n, "endTime", "endsAt")),
+    starts_at: localIso(str(pick(timeslot, "startTime", "startsAt") ?? pick(n, "startTime", "startsAt")), tz),
+    ends_at: localIso(str(pick(timeslot, "endTime", "endsAt") ?? pick(n, "endTime", "endsAt")), tz),
     timezone: tz,
     timeslot_id: str(timeslot?.id ?? pick(n, "timeslotId")),
-    location: str(pick(location, "name", "title") ?? pick(n, "locationName", "networkingArea.name")),
-    table: str(pick(n, "tableName", "table", "tableNumber", "location.tableName")),
-    note: str(pick(n, "message", "note", "lastMessage")),
+    location: str(pick(location, "name", "title") ?? (typeof timeslot?.location === "string" ? timeslot.location : undefined) ?? pick(n, "locationName", "networkingArea.name")),
+    table: tableIdx != null ? (typeof tableIdx === "number" || /^\d+$/.test(String(tableIdx)) ? `Table ${tableIdx}` : String(tableIdx)) : null,
+    note: str(pick(n, "currentStatus.message", "message", "note")),
     conversation_id: str(pick(n, "chatConversation.id", "chatConversationId", "conversationId")),
     created_at: str(pick(n, "createdAt")),
     updated_at: str(pick(n, "updatedAt")),
@@ -318,15 +360,15 @@ export interface ConversationModel {
 export function conversationFromMeeting(n: Node, m: MeetingModel): ConversationModel | null {
   if (!m.conversation_id) return null;
   const conv = (n.chatConversation && typeof n.chatConversation === "object" ? n.chatConversation : {}) as any;
-  const unread = pick<number>(conv, "unreadCount", "unreadMessagesCount") ?? pick<number>(n, "unreadMessagesCount", "unreadCount");
+  const unread = pick<number>(conv, "unreadCount", "unreadMessagesCount") ?? pick<number>(n, "unreadMessagesCount", "unreadCount", "unreadNotificationsCount");
   return {
     conversation_id: m.conversation_id,
     event_slug: m.event_slug,
     participants: m.counterpart ? [{ attendee_id: m.counterpart.attendee_id, user_id: m.counterpart.user_id, name: m.counterpart.name }] : [],
     meeting_id: m.meeting_id,
     meeting_status: m.status,
-    last_message_at: str(pick(conv, "lastMessageAt", "latestMessage.createdAt", "updatedAt") ?? pick(n, "lastMessageAt", "updatedAt")),
-    last_message_preview: str(pick(conv, "latestMessage.content", "lastMessage.content", "lastMessage")),
+    last_message_at: str(pick(conv, "lastMessage.createdAt", "lastMessageAt", "latestMessage.createdAt") ?? pick(n, "lastMessageAt", "updatedAt")),
+    last_message_preview: str(pick(conv, "lastMessage.content", "latestMessage.content")),
     unread_count: typeof unread === "number" ? unread : unread != null ? Number(unread) : null,
   };
 }
@@ -350,7 +392,7 @@ export function mapMessage(n: any, conversationId: string, me: MeContext): Messa
   return {
     message_id: String(n.id ?? n.uuid),
     conversation_id: conversationId,
-    sender: { user_id: userId, attendee_id: str(pick(n, "attendeeId", "attendee.id")), name: fullName(user), is_me: !!me.userId && userId === me.userId },
+    sender: { user_id: userId, attendee_id: str(pick(n, "memberId", "attendeeId", "attendee.id")), name: fullName(user), is_me: !!me.userId && userId === me.userId },
     body: str(pick(n, "content", "body", "text", "message")),
     sent_at: str(pick(n, "createdAt", "sentAt")),
     is_meeting_proposal: proposal,
@@ -374,6 +416,7 @@ export type NotificationType =
   | "meeting_rescheduled"
   | "chat_message"
   | "session_reminder"
+  | "announcement"
   | "other";
 
 export function mapNotificationType(raw: string | null): NotificationType {
@@ -386,6 +429,7 @@ export function mapNotificationType(raw: string | null): NotificationType {
   if (/meeting|request|invite/.test(t)) return "meeting_request_received";
   if (/chat|message/.test(t)) return "chat_message";
   if (/timeslot|session|reminder|schedule|bookmark/.test(t)) return "session_reminder";
+  if (/announcement/.test(t)) return "announcement";
   return "other";
 }
 
@@ -403,7 +447,7 @@ export interface NotificationModel {
 }
 
 export function mapNotification(n: any): NotificationModel {
-  const data = (n.data && typeof n.data === "object" ? n.data : n.payload && typeof n.payload === "object" ? n.payload : {}) as any;
+  const data = (n.additionalData && typeof n.additionalData === "object" ? n.additionalData : n.data && typeof n.data === "object" ? n.data : n.payload && typeof n.payload === "object" ? n.payload : {}) as any;
   const rawType = str(pick(n, "notificationType", "kind", "category", "action") ?? pick(data, "type", "notificationType"));
   return {
     notification_id: String(n.id),
@@ -423,6 +467,8 @@ export function mapNotification(n: any): NotificationModel {
 
 export interface SlotModel {
   timeslot_id: string;
+  location: string | null;
+  booked_meeting_id: string | null;
   starts_at: string | null;
   ends_at: string | null;
   timezone: string | null;
@@ -431,12 +477,16 @@ export interface SlotModel {
 }
 
 export function mapSlot(n: any, tz: string | null, blockedByThem?: boolean): SlotModel {
-  const blockedMe = n.blocked === true || n.isBlocked === true || n.available === false || n.isAvailable === false || n.hasMeeting === true;
+  // Brella: `blocked` (you blocked it), a `meeting` relation (already booked), `isFree` on suggested slots.
+  const booked = !!(n.meeting && typeof n.meeting === "object" && n.meeting.id);
+  const blockedMe = n.blocked === true || n.isBlocked === true || n.isFree === false || n.available === false || booked;
   return {
     timeslot_id: String(n.id),
-    starts_at: str(pick(n, "startTime", "startsAt")),
-    ends_at: str(pick(n, "endTime", "endsAt")),
+    starts_at: localIso(str(pick(n, "startTime", "startsAt")), tz),
+    ends_at: localIso(str(pick(n, "endTime", "endsAt")), tz),
     timezone: tz,
+    location: typeof n.location === "string" ? n.location : null,
+    booked_meeting_id: booked ? String(n.meeting.id) : null,
     is_blocked_by_me: blockedMe,
     ...(blockedByThem === undefined ? {} : { is_blocked_by_them: blockedByThem }),
   };
